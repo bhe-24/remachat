@@ -1,0 +1,345 @@
+import { LitElement, html, css, PropertyValueMap } from 'lit';
+import { customElement, property, state, query } from 'lit/decorators.js';
+import { GoogleGenAI, GenerateContentResponse } from '@google/genai';
+
+interface Message {
+  id: string;
+  sender: 'user' | 'bot';
+  text: string;
+  timestamp: Date;
+  avatar: string;
+}
+
+// Simple unique ID generator
+const generateId = () => Math.random().toString(36).substring(2, 9);
+
+@customElement('rema-chat')
+export class RemaChat extends LitElement {
+  @property({ type: Array }) messages: Message[] = [];
+  @state() private _inputValue: string = '';
+  @state() private _isLoading: boolean = false;
+  @query('#chat-messages') private _chatMessagesContainer!: HTMLDivElement;
+
+  private ai: GoogleGenAI | null = null;
+  private readonly BOT_AVATAR = '😻'; // Cute cat emoji
+  private readonly USER_AVATAR = '👤';
+
+  constructor() {
+    super();
+    try {
+      this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
+    } catch (e) {
+      console.error("Failed to initialize GoogleGenAI:", e);
+      this.messages = [
+        ...this.messages,
+        {
+          id: generateId(),
+          sender: 'bot',
+          text: "I'm having trouble connecting to my brain right now. Please ensure the API key is configured correctly.",
+          timestamp: new Date(),
+          avatar: this.BOT_AVATAR,
+        },
+      ];
+    }
+  }
+
+  connectedCallback(): void {
+    super.connectedCallback();
+    if (this.messages.length === 0) {
+      this.messages = [
+        {
+          id: generateId(),
+          sender: 'bot',
+          text: "Hello! I'm Rema, your friendly AI health assistant. How can I help you today? Please remember, I'm an AI and not a substitute for professional medical advice.",
+          timestamp: new Date(),
+          avatar: this.BOT_AVATAR,
+        },
+      ];
+    }
+  }
+
+  protected updated(changedProperties: PropertyValueMap<any> | Map<PropertyKey, unknown>): void {
+    if (changedProperties.has('messages')) {
+      this._scrollToBottom();
+    }
+  }
+
+  private _scrollToBottom(): void {
+    this.updateComplete.then(() => {
+      if (this._chatMessagesContainer) {
+        this._chatMessagesContainer.scrollTop = this._chatMessagesContainer.scrollHeight;
+      }
+    });
+  }
+
+  private async _handleSendMessage(e?: Event): Promise<void> {
+    e?.preventDefault();
+    if (!this._inputValue.trim() || this._isLoading) return;
+
+    const userMessage: Message = {
+      id: generateId(),
+      sender: 'user',
+      text: this._inputValue.trim(),
+      timestamp: new Date(),
+      avatar: this.USER_AVATAR,
+    };
+    this.messages = [...this.messages, userMessage];
+    const currentInput = this._inputValue;
+    this._inputValue = '';
+    this._isLoading = true;
+
+    if (!this.ai) {
+      const errorMessage: Message = {
+        id: generateId(),
+        sender: 'bot',
+        text: "I'm unable to process requests at the moment. AI services are not initialized.",
+        timestamp: new Date(),
+        avatar: this.BOT_AVATAR,
+      };
+      this.messages = [...this.messages, errorMessage];
+      this._isLoading = false;
+      return;
+    }
+
+    try {
+      const response: GenerateContentResponse = await this.ai.models.generateContent({
+        model: 'gemini-2.5-flash-preview-04-17',
+        contents: currentInput,
+        config: {
+          systemInstruction: `You are Rema, a friendly and knowledgeable AI health expert. Your visual representation is a cute female cat icon (${this.BOT_AVATAR}).
+          Provide helpful and informative advice on health-related topics in a conversational and empathetic tone.
+          Always remind the user that your advice is for informational purposes only and does not substitute consultation with a qualified healthcare professional.
+          If a question is outside the scope of general health advice, seems like an emergency, or requires a diagnosis, politely state that you cannot answer and strongly recommend seeking immediate professional medical help.
+          Do not provide specific medical diagnoses or treatment plans. Keep responses concise and easy to understand.
+          If asked about your identity, affirm you are Rema, an AI assistant.`,
+        },
+      });
+
+      const botMessageText = response.text;
+      const botMessage: Message = {
+        id: generateId(),
+        sender: 'bot',
+        text: botMessageText || "I'm not sure how to respond to that. Could you try rephrasing?",
+        timestamp: new Date(),
+        avatar: this.BOT_AVATAR,
+      };
+      this.messages = [...this.messages, botMessage];
+    } catch (error) {
+      console.error('Error calling Gemini API:', error);
+      const errorMessage: Message = {
+        id: generateId(),
+        sender: 'bot',
+        text: 'Sorry, I encountered an issue trying to get a response. Please try again later.',
+        timestamp: new Date(),
+        avatar: this.BOT_AVATAR,
+      };
+      this.messages = [...this.messages, errorMessage];
+    } finally {
+      this._isLoading = false;
+      this._scrollToBottom();
+    }
+  }
+
+  static styles = css`
+    :host {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      background-color: #ffffff;
+      border-radius: 8px; /* If standalone, else inherited */
+      overflow: hidden;
+    }
+
+    .chat-header {
+      background-color: #007bff; /* Primary blue */
+      color: white;
+      padding: 15px 20px;
+      font-size: 1.2em;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .chat-header .avatar {
+      font-size: 1.5em;
+      margin-right: 10px;
+    }
+
+    #chat-messages {
+      flex-grow: 1;
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+    }
+
+    .message {
+      display: flex;
+      align-items: flex-end; /* Aligns avatar with bottom of message bubble */
+      max-width: 80%;
+      animation: fadeIn 0.3s ease-out;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .message-bubble {
+      padding: 10px 15px;
+      border-radius: 15px;
+      line-height: 1.5;
+      word-wrap: break-word;
+    }
+
+    .message .avatar {
+      font-size: 1.8em; /* Slightly larger avatar in chat */
+      margin: 0 10px;
+      align-self: flex-start; /* Align avatar to the top of the message group */
+    }
+    
+    .message.user {
+      align-self: flex-end;
+      flex-direction: row-reverse;
+    }
+
+    .message.user .message-bubble {
+      background-color: #007bff; /* User message blue */
+      color: white;
+      border-bottom-right-radius: 5px;
+    }
+
+    .message.user .avatar {
+      /* User avatar can be hidden or styled differently if needed */
+    }
+
+    .message.bot {
+      align-self: flex-start;
+    }
+
+    .message.bot .message-bubble {
+      background-color: #e9ecef; /* Bot message light gray */
+      color: #333;
+      border-bottom-left-radius: 5px;
+    }
+    
+    .message-content {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .message-sender {
+      font-size: 0.8em;
+      color: #666;
+      margin-bottom: 4px;
+      padding: 0 5px;
+    }
+    
+    .message.user .message-sender {
+      text-align: right;
+    }
+
+
+    .message-timestamp {
+      font-size: 0.7em;
+      color: #888;
+      margin-top: 5px;
+      padding: 0 5px;
+    }
+    
+    .message.user .message-timestamp {
+      text-align: right;
+    }
+    .message.bot .message-timestamp {
+      text-align: left;
+    }
+
+
+    .chat-input-area {
+      display: flex;
+      padding: 15px;
+      border-top: 1px solid #e0e0e0;
+      background-color: #f8f9fa;
+    }
+
+    .chat-input-area input {
+      flex-grow: 1;
+      padding: 10px 15px;
+      border: 1px solid #ced4da;
+      border-radius: 20px;
+      font-size: 1em;
+      margin-right: 10px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .chat-input-area input:focus {
+      border-color: #007bff;
+    }
+
+    .chat-input-area button {
+      min-width: 80px;
+      background-color: #28a745; /* Send button green */
+      color: white;
+      border: none;
+      border-radius: 20px;
+      font-weight: 600;
+      transition: background-color 0.2s;
+    }
+
+    .chat-input-area button:hover {
+      background-color: #218838;
+    }
+    .chat-input-area button:disabled {
+      background-color: #bdc3c7;
+    }
+
+    .loading-indicator {
+      text-align: center;
+      padding: 5px 0 0 0;
+      font-style: italic;
+      color: #666;
+      font-size: 0.9em;
+    }
+  `;
+
+  render() {
+    return html`
+      <div class="chat-header">
+        <span class="avatar">${this.BOT_AVATAR}</span> Rema - Your Health Expert
+      </div>
+      <div id="chat-messages" aria-live="polite">
+        ${this.messages.map(
+          (msg) => html`
+            <div class="message ${msg.sender}">
+              <span class="avatar">${msg.avatar}</span>
+              <div class="message-content">
+                <div class="message-sender">
+                  ${msg.sender === 'bot' ? 'Rema' : 'You'}
+                </div>
+                <div class="message-bubble">${msg.text}</div>
+                <div class="message-timestamp">
+                  ${msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </div>
+              </div>
+            </div>
+          `
+        )}
+        ${this._isLoading ? html`<div class="loading-indicator bot">Rema is typing...</div>` : ''}
+      </div>
+      <form class="chat-input-area" @submit="${this._handleSendMessage}">
+        <input
+          type="text"
+          .value="${this._inputValue}"
+          @input="${(e: Event) => this._inputValue = (e.target as HTMLInputElement).value}"
+          placeholder="Ask Rema about your health..."
+          aria-label="Your message"
+          ?disabled="${this._isLoading}"
+        />
+        <button type="submit" ?disabled="${this._isLoading || !this._inputValue.trim()}">Send</button>
+      </form>
+    `;
+  }
+}
